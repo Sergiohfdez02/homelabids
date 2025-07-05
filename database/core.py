@@ -36,6 +36,7 @@ def connect_to_db(DB_NAME,table):
     try:
         conn = sqlite3.connect(DB_NAME)
         conn.execute("PRAGMA busy_timeout = 10000")
+        conn.execute("PRAGMA journal_mode=WAL;")
         #log_info(logger, f"[INFO] Connected to database: {DB_NAME} table {table}")
         return conn
     except sqlite3.Error as e:
