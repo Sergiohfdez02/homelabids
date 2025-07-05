@@ -14,7 +14,7 @@ from init import *
 import ipaddress
 import socket
 import struct
-from locallogging import log_error, log_info, log_warn
+from src.locallogging import log_error, log_info, log_warn
 from ipaddress import IPv4Network
 
 def is_ip_in_range(ip, ranges):

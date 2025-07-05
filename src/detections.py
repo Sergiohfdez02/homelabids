@@ -12,7 +12,7 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 sys.path.insert(0, "/database")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from locallogging import log_info, log_error, log_warn
+from src.locallogging import log_info, log_error, log_warn
 from init import * 
 from database.newflows import get_new_flows
 
