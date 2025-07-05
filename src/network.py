@@ -1,5 +1,6 @@
 import sys
 import os
+import logging
 from pathlib import Path
 current_dir = Path(__file__).resolve().parent
 parent_dir = str(current_dir.parent)
