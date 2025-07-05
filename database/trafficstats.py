@@ -2,6 +2,11 @@ import os
 import sys
 from database.core import connect_to_db, disconnect_from_db
 from pathlib import Path
+import sqlite3
+import logging
+import time
+from datetime import datetime, timedelta
+from src.network import is_ip_in_range
 # Set up path for imports
 current_dir = Path(__file__).resolve().parent
 parent_dir = str(current_dir.parent)
@@ -73,35 +78,50 @@ def update_traffic_stats(rows, config_dict):
     LOCAL_NETWORKS = set(config_dict['LocalNetworks'].split(','))
 
     try:
-        cursor = conn.cursor()
+        # Set PRAGMA settings for WAL and busy timeout
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=10000;")
 
-        # Process each row and update the trafficstats table
-        for row in rows:
-            src_ip, dst_ip, src_port, dst_port, protocol, packets, bytes_, flow_start, flow_end, last_seen, times_seen, tags = row
+        max_retries = 5
+        delay = 0.2
 
-            if not is_ip_in_range(src_ip, LOCAL_NETWORKS):
-                continue
+        for attempt in range(max_retries):
+            try:
+                cursor = conn.cursor()
+                for row in rows:
+                    src_ip, dst_ip, src_port, dst_port, protocol, packets, bytes_, flow_start, flow_end, last_seen, times_seen, tags = row
 
-            # Format the timestamp as yyyy-mm-dd-hh
-            timestamp = datetime.now().strftime('%Y-%m-%d:%H')
+                    if not is_ip_in_range(src_ip, LOCAL_NETWORKS):
+                        continue
 
-            # Insert or update the traffic statistics for the source IP and timestamp
-            cursor.execute("""
-                INSERT INTO trafficstats (ip_address, timestamp, total_packets, total_bytes)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(ip_address, timestamp)
-                DO UPDATE SET
-                    total_packets = total_packets + excluded.total_packets,
-                    total_bytes = total_bytes + excluded.total_bytes
-            """, (src_ip, timestamp, packets, bytes_))
+                    # Format the timestamp as yyyy-mm-dd-hh
+                    timestamp = datetime.now().strftime('%Y-%m-%d:%H')
 
-        conn.commit()
-        log_info(logger, f"[INFO] Updated traffic statistics for {len(rows)} rows.")
-    except sqlite3.Error as e:
-        log_error(logger, f"[ERROR] Error updating traffic statistics: {e}")
+                    # Insert or update the traffic statistics for the source IP and timestamp
+                    cursor.execute("""
+                        INSERT INTO trafficstats (ip_address, timestamp, total_packets, total_bytes)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(ip_address, timestamp)
+                        DO UPDATE SET
+                            total_packets = total_packets + excluded.total_packets,
+                            total_bytes = total_bytes + excluded.total_bytes
+                    """, (src_ip, timestamp, packets, bytes_))
+
+                conn.commit()
+                log_info(logger, f"[INFO] Updated traffic statistics for {len(rows)} rows.")
+                break  # success
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e).lower():
+                    log_warn(logger, f"[WARN] database locked, retry {attempt+1}/{max_retries}")
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                else:
+                    raise
+        else:
+            log_error(logger, "[ERROR] Failed to update traffic statistics after retries")
     finally:
         disconnect_from_db(conn)
-    disconnect_from_db(conn)
 
 def get_traffic_stats_for_ip(ip_address):
     """
