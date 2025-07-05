@@ -14,7 +14,7 @@ sys.path.insert(0, "/database")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import logging
 from src.locallogging import log_info, log_error
-from const import CONST_PERFORMANCE_DB, CONST_CONSOLIDATED_DB
+from src.const import CONST_PERFORMANCE_DB, CONST_CONSOLIDATED_DB
 
 def delete_database(db_path):
     """Deletes the specified SQLite database file if it exists."""

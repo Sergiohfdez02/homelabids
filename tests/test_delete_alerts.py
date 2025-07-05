@@ -1,6 +1,7 @@
 import sys
 import os
 from pathlib import Path
+import json
 current_dir = Path(__file__).resolve().parent
 parent_dir = str(current_dir.parent)
 if parent_dir not in sys.path:
@@ -20,7 +21,7 @@ sys.path.append(parent_dir)
 from database.alerts import delete_ignorelisted_alerts
 from database.core import connect_to_db, disconnect_from_db
 from init import CONST_CONSOLIDATED_DB
-from locallogging import log_info, log_error
+from src.locallogging import log_info, log_error
 
 def setup_test_data(conn):
     """Set up test alert data in the database"""
