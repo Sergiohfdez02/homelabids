@@ -13,8 +13,8 @@ if parent_dir not in sys.path:
 sys.path.insert(0, "/database")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import logging
-from locallogging import log_info, log_error
-from const import CONST_PERFORMANCE_DB, CONST_CONSOLIDATED_DB
+from src.locallogging import log_info, log_error
+from src.const import CONST_PERFORMANCE_DB, CONST_CONSOLIDATED_DB, CONST_CREATE_DBPERFORMANCE_SQL
 
 def delete_database(db_path):
     """Deletes the specified SQLite database file if it exists."""
@@ -36,6 +36,7 @@ def connect_to_db(DB_NAME,table):
     try:
         conn = sqlite3.connect(DB_NAME)
         conn.execute("PRAGMA busy_timeout = 10000")
+        conn.execute("PRAGMA journal_mode=WAL;")
         #log_info(logger, f"[INFO] Connected to database: {DB_NAME} table {table}")
         return conn
     except sqlite3.Error as e:
@@ -136,26 +137,64 @@ def insert_dbperformance(db_name, query, description, execution_time, rows_retur
         run_timestamp (str, optional): Timestamp of the run. If None, uses current time.
     """
     logger = logging.getLogger(__name__)
+    import errno
 
+    # Ensure the directory for CONST_PERFORMANCE_DB exists
     try:
-        conn = connect_to_db(CONST_PERFORMANCE_DB, "dbperformance")
-        if not conn:
-            log_error(logger, f"[ERROR] Unable to connect to {CONST_PERFORMANCE_DB} for dbperformance insert.")
-            return False
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO dbperformance (db_name, query, function, execution_time, rows_returned, run_timestamp)
-            VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
-        """, (db_name, query, description, execution_time, rows_returned))
-        conn.commit()
-       # log_info(logger, f"[INFO] Inserted dbperformance record for query: {query[:50]}...")
-        return True
+        os.makedirs(os.path.dirname(CONST_PERFORMANCE_DB), exist_ok=True)
     except Exception as e:
-        log_error(logger, f"[ERROR] Failed to insert dbperformance record: {e}")
+        log_error(logger, f"[ERROR] Could not create directory for performance DB: {e}")
         return False
-    finally:
-        if 'conn' in locals() and conn:
-            disconnect_from_db(conn)
+
+    retry = False
+    for attempt in (1, 2):  # at most two tries: first, then after recovery if needed
+        conn = None
+        try:
+            conn = connect_to_db(CONST_PERFORMANCE_DB, "dbperformance")
+            if not conn:
+                log_error(logger, f"[ERROR] Unable to connect to {CONST_PERFORMANCE_DB} for dbperformance insert.")
+                return False
+            # Set PRAGMA journal_mode=DELETE (avoid WAL issues on some volume types)
+            try:
+                conn.execute("PRAGMA journal_mode=DELETE;")
+            except Exception as e:
+                log_error(logger, f"[ERROR] Failed to set PRAGMA journal_mode=DELETE: {e}")
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO dbperformance (db_name, query, function, execution_time, rows_returned, run_timestamp)
+                VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+            """, (db_name, query, description, execution_time, rows_returned))
+            conn.commit()
+            # log_info(logger, f"[INFO] Inserted dbperformance record for query: {query[:50]}...")
+            return True
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if (("disk i/o error" in msg or "no such table" in msg) and not retry):
+                log_error(logger, f"[RECOVERY] insert_dbperformance encountered '{e}', attempting to re-create db/table and retry (attempt {attempt})")
+                try:
+                    create_table(CONST_PERFORMANCE_DB, CONST_CREATE_DBPERFORMANCE_SQL, "dbperformance")
+                except Exception as ce:
+                    log_error(logger, f"[ERROR] Recovery failed during create_table: {ce}")
+                    break
+                retry = True
+                continue  # retry the insert after recovery
+            else:
+                log_error(logger, f"[ERROR] Failed to insert dbperformance record (OperationalError): {e}")
+                break
+        except Exception as e:
+            log_error(logger, f"[ERROR] Failed to insert dbperformance record: {e}")
+            break
+        finally:
+            if conn:
+                disconnect_from_db(conn)
+        break  # don't loop unless we explicitly continued for recovery
+    else:
+        log_error(logger, "[ERROR] insert_dbperformance failed after recovery attempt.")
+        return False
+
+    if retry:
+        log_info(logger, "[RECOVERY] insert_dbperformance recovery succeeded.")
+    return False
 
 def run_timed_query(cursor, query, params=None, description=None, fetch_all=True):
     """

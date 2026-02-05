@@ -360,43 +360,68 @@ def update_localhost_threat_score(ip_address, threat_score):
     Returns:
         bool: True if the update was successful, False otherwise
     """
-    logger = logging.getLogger(__name__)
-    
-    try:
-        # Connect to the localhosts database
-        conn = connect_to_db(CONST_CONSOLIDATED_DB, "localhosts")
-        if not conn:
-            log_error(logger, "[ERROR] Unable to connect to localhosts database.")
-            return False
+    import time
+    import sqlite3
 
-        cursor = conn.cursor()
-        
-        # First check if the localhost exists
-        cursor.execute("SELECT 1 FROM localhosts WHERE ip_address = ?", (ip_address,))
-        if not cursor.fetchone():
-            log_warn(logger, f"[WARN] No localhost found with IP {ip_address} to update threat score")
+    logger = logging.getLogger(__name__)
+
+    max_retries = 5
+    backoff = 0.2
+
+    for attempt in range(max_retries):
+        conn = None
+        try:
+            # Connect to the localhosts database
+            conn = connect_to_db(CONST_CONSOLIDATED_DB, "localhosts")
+            if not conn:
+                log_error(logger, "[ERROR] Unable to connect to localhosts database.")
+                return False
+
+            cursor = conn.cursor()
+
+            # First check if the localhost exists
+            cursor.execute("SELECT 1 FROM localhosts WHERE ip_address = ?", (ip_address,))
+            if not cursor.fetchone():
+                log_warn(logger, f"[WARN] No localhost found with IP {ip_address} to update threat score")
+                return False
+
+            # Update the threat_score for the specified localhost
+            cursor.execute("""
+                UPDATE localhosts
+                SET threat_score = ?
+                WHERE ip_address = ?
+            """, (threat_score, ip_address))
+
+            conn.commit()
+            log_info(logger, f"[INFO] Successfully updated threat score for {ip_address} to {threat_score}")
+            return True
+
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                log_warn(logger, f"[WARN] Database is locked while updating threat score for {ip_address}, retrying ({attempt+1}/{max_retries})")
+                if conn:
+                    conn.rollback()
+                    disconnect_from_db(conn)
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            else:
+                if conn:
+                    conn.rollback()
+                    disconnect_from_db(conn)
+                log_error(logger, f"[ERROR] Database error while updating threat score for {ip_address}: {e}")
+                return False
+        except Exception as e:
+            if conn:
+                conn.rollback()
+                disconnect_from_db(conn)
+            log_error(logger, f"[ERROR] Unexpected error while updating threat score for {ip_address}: {e}")
             return False
-        
-        # Update the threat_score for the specified localhost
-        cursor.execute("""
-            UPDATE localhosts
-            SET threat_score = ?
-            WHERE ip_address = ?
-        """, (threat_score, ip_address))
-        
-        conn.commit()
-        log_info(logger, f"[INFO] Successfully updated threat score for {ip_address} to {threat_score}")
-        return True
-        
-    except sqlite3.Error as e:
-        log_error(logger, f"[ERROR] Database error while updating threat score for {ip_address}: {e}")
-        return False
-    except Exception as e:
-        log_error(logger, f"[ERROR] Unexpected error while updating threat score for {ip_address}: {e}")
-        return False
-    finally:
-        if 'conn' in locals() and conn:
-            disconnect_from_db(conn)
+        finally:
+            if conn:
+                disconnect_from_db(conn)
+    log_error(logger, f"[ERROR] Failed to update threat score for {ip_address} after {max_retries} retries due to database lock.")
+    return False
 
 def update_localhost_alerts_enabled(ip_address, alerts_enabled):
     """

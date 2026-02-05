@@ -1,5 +1,6 @@
 import sys
 import os
+import logging
 from pathlib import Path
 current_dir = Path(__file__).resolve().parent
 parent_dir = str(current_dir.parent)
@@ -13,7 +14,7 @@ from init import *
 import ipaddress
 import socket
 import struct
-from locallogging import log_error, log_info, log_warn
+from src.locallogging import log_error, log_info, log_warn
 from ipaddress import IPv4Network
 
 def is_ip_in_range(ip, ranges):
